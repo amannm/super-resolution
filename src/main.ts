@@ -1,7 +1,7 @@
 import * as tf from '@tensorflow/tfjs';
 
 async function main() {
-    const modelLoadTask = tf.loadGraphModel("../model/srgan/model.json");
+    const modelLoadTask = tf.loadGraphModel("../model/esrgan/model.json");
     const img = document.getElementById("image") as HTMLImageElement;
     const canvas = document.getElementById("canvas") as HTMLCanvasElement;
     canvas.width = img.clientWidth * 4;

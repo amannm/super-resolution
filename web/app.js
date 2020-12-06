@@ -71134,7 +71134,7 @@ var __awaiter = (undefined && undefined.__awaiter) || function (thisArg, _argume
 };
 function main() {
     return __awaiter(this, void 0, void 0, function* () {
-        const modelLoadTask = loadGraphModel("../model/srgan/model.json");
+        const modelLoadTask = loadGraphModel("../model/esrgan/model.json");
         const img = document.getElementById("image");
         const canvas = document.getElementById("canvas");
         canvas.width = img.clientWidth * 4;
