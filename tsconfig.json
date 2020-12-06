@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "moduleResolution": "node",
+    "module": "es6",
+    "target": "es6",
+    "lib": [
+      "es6",
+      "dom"
+    ],
+    "outDir": "./dist",
+    "sourceMap": true,
+    "declaration": true,
+    "removeComments": false,
+    "preserveConstEnums": true,
+    "allowJs": false,
+    "alwaysStrict": true,
+    "noImplicitAny": true,
+    "noImplicitReturns": true,
+    "noImplicitThis": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "allowUnreachableCode": false,
+    "pretty": true
+  },
+  "include": [
+    "src/"
+  ],
+  "exclude": [
+    "node_modules/"
+  ]
+}
