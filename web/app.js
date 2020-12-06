@@ -71132,24 +71132,126 @@ var __awaiter = (undefined && undefined.__awaiter) || function (thisArg, _argume
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
-function main() {
-    return __awaiter(this, void 0, void 0, function* () {
-        const modelLoadTask = loadGraphModel("../model/esrgan/model.json");
-        const img = document.getElementById("image");
-        const canvas = document.getElementById("canvas");
-        canvas.width = img.clientWidth * 4;
-        canvas.height = img.clientHeight * 4;
-        const normalized = tidy(() => fromPixels(img).expandDims().toFloat());
-        const model = yield modelLoadTask;
-        const finalImage = tidy(() => {
-            const result = model.predict(normalized);
-            model.dispose();
-            return result.clipByValue(0, 255).round().toInt().squeeze();
+class SuperResolutionModel {
+    constructor(model) {
+        this.model = model;
+    }
+    predict(batches) {
+        return tidy(() => this.model.predict(batches.toFloat()).clipByValue(0, 255).round().toInt());
+    }
+    resolveBatch(inputs) {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (inputs.length === 0) {
+                return [];
+            }
+            const outputImageWidth = inputs[0].width * 4;
+            const outputImageHeight = inputs[0].height * 4;
+            const lowResolutionImages = tidy(() => stack(inputs.map(fromPixels)));
+            const highResolutionImages = tidy(() => this.predict(lowResolutionImages).unstack());
+            lowResolutionImages.dispose();
+            return Promise.all(highResolutionImages.map(highResolutionImage => toPixels(highResolutionImage).then(pixelData => {
+                highResolutionImage.dispose();
+                return new ImageData(pixelData, outputImageWidth, outputImageHeight);
+            })));
         });
-        toPixels(finalImage, canvas);
-        finalImage.dispose();
+    }
+    resolve(input) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const outputImageWidth = input.width * 4;
+            const outputImageHeight = input.height * 4;
+            const lowResolutionImage = tidy(() => expandDims(fromPixels(input)));
+            const highResolutionImage = tidy(() => this.predict(lowResolutionImage).squeeze());
+            lowResolutionImage.dispose();
+            return toPixels(highResolutionImage).then(pixelData => {
+                highResolutionImage.dispose();
+                return new ImageData(pixelData, outputImageWidth, outputImageHeight);
+            });
+        });
+    }
+    static open(path) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const graphModel = yield loadGraphModel(path);
+            return new SuperResolutionModel(graphModel);
+        });
+    }
+    close() {
+        this.model.dispose();
+    }
+}
+
+var __awaiter$1 = (undefined && undefined.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+function load() {
+    return __awaiter$1(this, void 0, void 0, function* () {
+        const img = document.getElementById("image");
+        const inputCanvas = document.getElementById("input");
+        inputCanvas.width = img.clientWidth;
+        inputCanvas.height = img.clientHeight;
+        const inputCtx = inputCanvas.getContext('2d');
+        inputCtx.drawImage(img, 0, 0, inputCanvas.width, inputCanvas.height);
+        inputCtx.save();
+        const outputCanvas = document.getElementById("output");
+        outputCanvas.width = img.clientWidth * 4;
+        outputCanvas.height = img.clientHeight * 4;
+        const imageGrid = subdivideImage(inputCtx, inputCanvas.width, inputCanvas.height);
+        const outputCtx = outputCanvas.getContext("2d");
+        const model = yield SuperResolutionModel.open("../model/esrgan/model.json");
+        imageGrid.forEach(cell => model.resolve(cell.image).then(resolvedImage => outputCtx.putImageData(resolvedImage, cell.gridX * resolvedImage.width, cell.gridY * resolvedImage.height)));
+        model.close();
+        outputCtx.save();
+        //tileImage(outputCtx, upscaledImages, outputCanvas.width);
     });
 }
-main().then(() => {
+function subdivideImage(ctx, width, height) {
+    const inputs = [];
+    const widthParams = subdivideLength(width);
+    const heightParams = subdivideLength(height);
+    for (let gridY = 0; gridY < heightParams.numSteps; gridY++) {
+        for (let gridX = 0; gridX < widthParams.numSteps; gridX++) {
+            const imageData = ctx.getImageData(gridX * widthParams.stepSize, gridY * heightParams.stepSize, widthParams.stepSize, heightParams.stepSize);
+            inputs.push({
+                gridX: gridX,
+                gridY: gridY,
+                image: imageData
+            });
+        }
+    }
+    return inputs;
+}
+function subdivideLength(length, maxStepSize = 128) {
+    const steps = Math.floor(length / maxStepSize);
+    if (steps === 0) {
+        return {
+            stepSize: length,
+            numSteps: 1,
+            extraPixels: 0
+        };
+    }
+    else {
+        if (length % maxStepSize === 0) {
+            return {
+                stepSize: maxStepSize,
+                numSteps: steps,
+                extraPixels: 0
+            };
+        }
+        else {
+            const numSteps = steps + 1;
+            return {
+                stepSize: Math.floor(length / numSteps),
+                numSteps: numSteps,
+                extraPixels: length % numSteps
+            };
+        }
+    }
+}
+load().then(() => {
     console.log("done");
 });
