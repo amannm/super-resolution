@@ -1,77 +1,65 @@
-import {SuperResolutionModel} from "./inference";
+import { SuperResolutionModel } from "./inference";
+import { ImageEnhancer } from "./imageEnhancer"
+
+const inputCanvas = document.getElementById("canvas") as HTMLCanvasElement;
+const enhancer = new ImageEnhancer(inputCanvas);
 
 async function load() {
-    const img = document.getElementById("image") as HTMLImageElement;
 
-    const inputCanvas = document.getElementById("input") as HTMLCanvasElement;
-    inputCanvas.width = img.clientWidth;
-    inputCanvas.height = img.clientHeight;
-    const inputCtx = inputCanvas.getContext('2d');
-    inputCtx.drawImage(img, 0, 0, inputCanvas.width, inputCanvas.height);
-    inputCtx.save();
-
-    const outputCanvas = document.getElementById("output") as HTMLCanvasElement;
-    outputCanvas.width = img.clientWidth * 4;
-    outputCanvas.height = img.clientHeight * 4;
-
-    const imageGrid = subdivideImage(inputCtx, inputCanvas.width, inputCanvas.height);
-
-    const outputCtx = outputCanvas.getContext("2d");
-    const model = await SuperResolutionModel.open("../model/esrgan/model.json");
-    imageGrid.forEach(cell => model.resolve(cell.image).then(resolvedImage => outputCtx.putImageData(resolvedImage, cell.gridX * resolvedImage.width, cell.gridY * resolvedImage.height)));
-    model.close();
-    outputCtx.save();
-    
-    //tileImage(outputCtx, upscaledImages, outputCanvas.width);
-}
-
-function subdivideImage(ctx: CanvasRenderingContext2D, width: number, height: number): {
-    gridX: number,
-    gridY: number,
-    image: ImageData
-}[] {
-    const inputs = [];
-    const widthParams = subdivideLength(width);
-    const heightParams = subdivideLength(height);
-    for (let gridY = 0; gridY < heightParams.numSteps; gridY++) {
-        for (let gridX = 0; gridX < widthParams.numSteps; gridX++) {
-            const imageData: ImageData = ctx.getImageData(gridX * widthParams.stepSize, gridY * heightParams.stepSize, widthParams.stepSize, heightParams.stepSize);
-            inputs.push({
-                gridX: gridX,
-                gridY: gridY,
-                image: imageData
-            });
+    // key actions
+    window.addEventListener("keydown", event => {
+        switch (event.key) {
+            case "e":
+                enhancer.toggleEnhancedVisibility();
+                break;
+            default:
+                break
         }
-    }
-    return inputs;
-}
+    });
 
-function subdivideLength(length: number, maxStepSize: number = 128): { stepSize: number, numSteps: number, extraPixels: number} {
-    const steps = Math.floor(length / maxStepSize);
-    if (steps === 0) {
-        return {
-        stepSize: length,
-        numSteps: 1,
-        extraPixels: 0
-        }
-    } else {
-        if (length % maxStepSize === 0) {
-            return {
-                stepSize: maxStepSize,
-                numSteps: steps,
-                extraPixels: 0
-            };
+    // file drag and drop trigger
+    const root = document.getElementById("root");
+    root.addEventListener("drop", (e) => {
+        console.log('File(s) dropped');
+        e.preventDefault();
+        if (e.dataTransfer.items) {
+            for (let i = 0; i < e.dataTransfer.items.length; i++) {
+                if (e.dataTransfer.items[i].kind === 'file') {
+                    const file = e.dataTransfer.items[i].getAsFile();
+                    processImageFile(file);
+                }
+            }
         } else {
-            const numSteps = steps + 1;
-            return {
-                stepSize: Math.floor(length / numSteps),
-                numSteps: numSteps,
-                extraPixels: length % numSteps
-            };
+            for (let i = 0; i < e.dataTransfer.files.length; i++) {
+                const file = e.dataTransfer.files[i];
+                processImageFile(file);
+            }
         }
+    });
+    root.addEventListener("dragover", (e) => {
+        console.log('File(s) in drop zone');
+        e.preventDefault();
+    });
+
+    // hacky convenience things
+    (window as any).lol = {
+        enhancer: enhancer
     }
 }
 
-load().then(() => {
-    console.log("done");
-});
+load();
+
+const processImageFile = (file: File) => {
+    const loadModelTask = SuperResolutionModel.open("../model/esrgan/model.json");
+    const fileReader = new FileReader();
+    fileReader.onload = async () => {
+        const image = await createImageBitmap(file);
+        await enhancer.load(image);
+        image.close();
+        const model = await loadModelTask;
+        await enhancer.enhance(model);
+        model.close();
+        console.log("image processing complete");
+    };
+    fileReader.readAsDataURL(file);
+}

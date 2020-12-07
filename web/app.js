@@ -71136,38 +71136,6 @@ class SuperResolutionModel {
     constructor(model) {
         this.model = model;
     }
-    predict(batches) {
-        return tidy(() => this.model.predict(batches.toFloat()).clipByValue(0, 255).round().toInt());
-    }
-    resolveBatch(inputs) {
-        return __awaiter(this, void 0, void 0, function* () {
-            if (inputs.length === 0) {
-                return [];
-            }
-            const outputImageWidth = inputs[0].width * 4;
-            const outputImageHeight = inputs[0].height * 4;
-            const lowResolutionImages = tidy(() => stack(inputs.map(fromPixels)));
-            const highResolutionImages = tidy(() => this.predict(lowResolutionImages).unstack());
-            lowResolutionImages.dispose();
-            return Promise.all(highResolutionImages.map(highResolutionImage => toPixels(highResolutionImage).then(pixelData => {
-                highResolutionImage.dispose();
-                return new ImageData(pixelData, outputImageWidth, outputImageHeight);
-            })));
-        });
-    }
-    resolve(input) {
-        return __awaiter(this, void 0, void 0, function* () {
-            const outputImageWidth = input.width * 4;
-            const outputImageHeight = input.height * 4;
-            const lowResolutionImage = tidy(() => expandDims(fromPixels(input)));
-            const highResolutionImage = tidy(() => this.predict(lowResolutionImage).squeeze());
-            lowResolutionImage.dispose();
-            return toPixels(highResolutionImage).then(pixelData => {
-                highResolutionImage.dispose();
-                return new ImageData(pixelData, outputImageWidth, outputImageHeight);
-            });
-        });
-    }
     static open(path) {
         return __awaiter(this, void 0, void 0, function* () {
             const graphModel = yield loadGraphModel(path);
@@ -71177,7 +71145,43 @@ class SuperResolutionModel {
     close() {
         this.model.dispose();
     }
+    predict(batches) {
+        return tidy(() => this.model.predict(batches.toFloat()).clipByValue(0, 255).round().toInt());
+    }
+    resolveBatch(inputs) {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (inputs.length === 0) {
+                return [];
+            }
+            const outputImageWidth = inputs[0].width * SuperResolutionModel.SCALING_FACTOR;
+            const outputImageHeight = inputs[0].height * SuperResolutionModel.SCALING_FACTOR;
+            const lowResolutionImages = tidy(() => stack(inputs.map(fromPixels)));
+            const highResolutionImages = tidy(() => this.predict(lowResolutionImages).unstack());
+            lowResolutionImages.dispose();
+            return yield Promise.all(highResolutionImages.map(highResolutionImage => toPixels(highResolutionImage).then(pixelData => {
+                highResolutionImage.dispose();
+                return new ImageData(pixelData, outputImageWidth, outputImageHeight);
+            })));
+        });
+    }
+    resolve(input) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const t0 = performance.now();
+            const outputImageWidth = input.width * SuperResolutionModel.SCALING_FACTOR;
+            const outputImageHeight = input.height * SuperResolutionModel.SCALING_FACTOR;
+            const lowResolutionImage = tidy(() => expandDims(fromPixels(input)));
+            const highResolutionImage = tidy(() => this.predict(lowResolutionImage).squeeze());
+            lowResolutionImage.dispose();
+            const pixelData = yield toPixels(highResolutionImage);
+            highResolutionImage.dispose();
+            const t1 = performance.now();
+            console.log(`resolution took ${t1 - t0} milliseconds.`);
+            console.log(memory());
+            return new ImageData(pixelData, outputImageWidth, outputImageHeight);
+        });
+    }
 }
+SuperResolutionModel.SCALING_FACTOR = 4;
 
 var __awaiter$1 = (undefined && undefined.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
@@ -71188,70 +71192,209 @@ var __awaiter$1 = (undefined && undefined.__awaiter) || function (thisArg, _argu
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
-function load() {
-    return __awaiter$1(this, void 0, void 0, function* () {
-        const img = document.getElementById("image");
-        const inputCanvas = document.getElementById("input");
-        inputCanvas.width = img.clientWidth;
-        inputCanvas.height = img.clientHeight;
-        const inputCtx = inputCanvas.getContext('2d');
-        inputCtx.drawImage(img, 0, 0, inputCanvas.width, inputCanvas.height);
-        inputCtx.save();
-        const outputCanvas = document.getElementById("output");
-        outputCanvas.width = img.clientWidth * 4;
-        outputCanvas.height = img.clientHeight * 4;
-        const imageGrid = subdivideImage(inputCtx, inputCanvas.width, inputCanvas.height);
-        const outputCtx = outputCanvas.getContext("2d");
-        const model = yield SuperResolutionModel.open("../model/esrgan/model.json");
-        imageGrid.forEach(cell => model.resolve(cell.image).then(resolvedImage => outputCtx.putImageData(resolvedImage, cell.gridX * resolvedImage.width, cell.gridY * resolvedImage.height)));
-        model.close();
-        outputCtx.save();
-        //tileImage(outputCtx, upscaledImages, outputCanvas.width);
-    });
-}
-function subdivideImage(ctx, width, height) {
-    const inputs = [];
-    const widthParams = subdivideLength(width);
-    const heightParams = subdivideLength(height);
-    for (let gridY = 0; gridY < heightParams.numSteps; gridY++) {
-        for (let gridX = 0; gridX < widthParams.numSteps; gridX++) {
-            const imageData = ctx.getImageData(gridX * widthParams.stepSize, gridY * heightParams.stepSize, widthParams.stepSize, heightParams.stepSize);
-            inputs.push({
-                gridX: gridX,
-                gridY: gridY,
-                image: imageData
+class ImageEnhancer {
+    constructor(canvas) {
+        this.canvas = canvas;
+        this.patches = [];
+        this.enhancedLayerOpacity = 1.0;
+    }
+    load(image) {
+        return __awaiter$1(this, void 0, void 0, function* () {
+            // render image on pixel buffer
+            const widthParams = ImageEnhancer.splitLength(image.width);
+            const heightParams = ImageEnhancer.splitLength(image.height);
+            this.canvas.width = image.width - widthParams.remainder;
+            this.canvas.height = image.height - heightParams.remainder;
+            const ctx = this.canvas.getContext('2d');
+            ctx.drawImage(image, 0, 0, this.canvas.width, this.canvas.height, 0, 0, this.canvas.width, this.canvas.height);
+            // extract image patches from rendered image
+            this.patches = [];
+            for (let gridY = 0; gridY < heightParams.stepCount; gridY++) {
+                for (let gridX = 0; gridX < widthParams.stepCount; gridX++) {
+                    const cellTopLeftX = gridX * widthParams.stepSize;
+                    const cellTopLeftY = gridY * heightParams.stepSize;
+                    const imageData = ctx.getImageData(cellTopLeftX, cellTopLeftY, widthParams.stepSize, heightParams.stepSize);
+                    this.patches.push({
+                        topLeftX: cellTopLeftX,
+                        topLeftY: cellTopLeftY,
+                        originalImage: imageData,
+                        enhancedImage: null
+                    });
+                }
+            }
+            // prepare for enhancement
+            ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+            this.canvas.width *= SuperResolutionModel.SCALING_FACTOR;
+            this.canvas.height *= SuperResolutionModel.SCALING_FACTOR;
+            yield Promise.all(this.patches.map(patch => this.drawOriginalPatch(patch)));
+            this.canvas.style.width = (this.canvas.width / SuperResolutionModel.SCALING_FACTOR) + "px";
+            this.canvas.style.height = (this.canvas.height / SuperResolutionModel.SCALING_FACTOR) + "px";
+        });
+    }
+    toggleEnhancedVisibility() {
+        return __awaiter$1(this, void 0, void 0, function* () {
+            if (this.enhancedLayerOpacity !== 0) {
+                this.enhancedLayerOpacity = 0;
+            }
+            else {
+                this.enhancedLayerOpacity = 1.0;
+            }
+            yield this.draw();
+            console.log("enhanced layer visibility: " + this.enhancedLayerOpacity);
+        });
+    }
+    enhance(model) {
+        return __awaiter$1(this, void 0, void 0, function* () {
+            // prepare pixel buffer
+            this.canvas.removeAttribute("style");
+            // incremental patch enhancement to avoid blowing up the GPU
+            for (let i = 0; i < this.patches.length; i++) {
+                const patch = this.patches[i];
+                yield model.resolve(patch.originalImage).then(enhancedImage => {
+                    patch.enhancedImage = enhancedImage;
+                    return this.drawEnhancedPatch(patch);
+                });
+            }
+            // present results
+            this.canvas.style.width = (this.canvas.width / SuperResolutionModel.SCALING_FACTOR) + "px";
+            this.canvas.style.height = (this.canvas.height / SuperResolutionModel.SCALING_FACTOR) + "px";
+            console.log("enhanced layer complete");
+        });
+    }
+    drawOriginalPatch(patch) {
+        return __awaiter$1(this, void 0, void 0, function* () {
+            const originalImage = yield createImageBitmap(patch.originalImage, {
+                resizeWidth: patch.originalImage.width * SuperResolutionModel.SCALING_FACTOR,
+                resizeHeight: patch.originalImage.height * SuperResolutionModel.SCALING_FACTOR,
+                resizeQuality: "high"
             });
-        }
+            const ctx = this.canvas.getContext("2d");
+            ctx.drawImage(originalImage, patch.topLeftX * SuperResolutionModel.SCALING_FACTOR, patch.topLeftY * SuperResolutionModel.SCALING_FACTOR);
+            originalImage.close();
+        });
     }
-    return inputs;
-}
-function subdivideLength(length, maxStepSize = 128) {
-    const steps = Math.floor(length / maxStepSize);
-    if (steps === 0) {
-        return {
-            stepSize: length,
-            numSteps: 1,
-            extraPixels: 0
-        };
+    drawEnhancedPatch(patch) {
+        return __awaiter$1(this, void 0, void 0, function* () {
+            const enhancedImage = yield createImageBitmap(patch.enhancedImage);
+            const ctx = this.canvas.getContext("2d");
+            ctx.save();
+            ctx.globalAlpha = this.enhancedLayerOpacity;
+            ctx.drawImage(enhancedImage, patch.topLeftX * SuperResolutionModel.SCALING_FACTOR, patch.topLeftY * SuperResolutionModel.SCALING_FACTOR);
+            ctx.restore();
+            enhancedImage.close();
+        });
     }
-    else {
-        if (length % maxStepSize === 0) {
+    drawPatch(patch) {
+        return __awaiter$1(this, void 0, void 0, function* () {
+            yield this.drawOriginalPatch(patch);
+            if (patch.enhancedImage !== null) {
+                yield this.drawEnhancedPatch(patch);
+            }
+        });
+    }
+    draw() {
+        return __awaiter$1(this, void 0, void 0, function* () {
+            this.canvas.removeAttribute("style");
+            const ctx = this.canvas.getContext("2d");
+            ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+            yield Promise.all(this.patches.map(patch => this.drawPatch(patch)));
+            this.canvas.style.width = (this.canvas.width / SuperResolutionModel.SCALING_FACTOR) + "px";
+            this.canvas.style.height = (this.canvas.height / SuperResolutionModel.SCALING_FACTOR) + "px";
+        });
+    }
+    static splitLength(length) {
+        let stepCount = Math.floor(length / ImageEnhancer.MAX_PATCH_SIZE);
+        if (stepCount === 0) {
             return {
-                stepSize: maxStepSize,
-                numSteps: steps,
-                extraPixels: 0
+                stepSize: length,
+                stepCount: 1,
+                remainder: 0
             };
         }
         else {
-            const numSteps = steps + 1;
-            return {
-                stepSize: Math.floor(length / numSteps),
-                numSteps: numSteps,
-                extraPixels: length % numSteps
-            };
+            if (length % ImageEnhancer.MAX_PATCH_SIZE === 0) {
+                return {
+                    stepSize: ImageEnhancer.MAX_PATCH_SIZE,
+                    stepCount: stepCount,
+                    remainder: 0
+                };
+            }
+            else {
+                stepCount++;
+                return {
+                    stepSize: Math.floor(length / stepCount),
+                    stepCount: stepCount,
+                    remainder: length % stepCount
+                };
+            }
         }
     }
 }
-load().then(() => {
-    console.log("done");
-});
+ImageEnhancer.MAX_PATCH_SIZE = 128;
+
+var __awaiter$2 = (undefined && undefined.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+const inputCanvas = document.getElementById("canvas");
+const enhancer = new ImageEnhancer(inputCanvas);
+function load() {
+    return __awaiter$2(this, void 0, void 0, function* () {
+        // key actions
+        window.addEventListener("keydown", event => {
+            switch (event.key) {
+                case "e":
+                    enhancer.toggleEnhancedVisibility();
+                    break;
+            }
+        });
+        // file drag and drop trigger
+        const root = document.getElementById("root");
+        root.addEventListener("drop", (e) => {
+            console.log('File(s) dropped');
+            e.preventDefault();
+            if (e.dataTransfer.items) {
+                for (let i = 0; i < e.dataTransfer.items.length; i++) {
+                    if (e.dataTransfer.items[i].kind === 'file') {
+                        const file = e.dataTransfer.items[i].getAsFile();
+                        processImageFile(file);
+                    }
+                }
+            }
+            else {
+                for (let i = 0; i < e.dataTransfer.files.length; i++) {
+                    const file = e.dataTransfer.files[i];
+                    processImageFile(file);
+                }
+            }
+        });
+        root.addEventListener("dragover", (e) => {
+            console.log('File(s) in drop zone');
+            e.preventDefault();
+        });
+        // hacky convenience things
+        window.lol = {
+            enhancer: enhancer
+        };
+    });
+}
+load();
+const processImageFile = (file) => {
+    const loadModelTask = SuperResolutionModel.open("../model/esrgan/model.json");
+    const fileReader = new FileReader();
+    fileReader.onload = () => __awaiter$2(void 0, void 0, void 0, function* () {
+        const image = yield createImageBitmap(file);
+        yield enhancer.load(image);
+        image.close();
+        const model = yield loadModelTask;
+        yield enhancer.enhance(model);
+        model.close();
+        console.log("image processing complete");
+    });
+    fileReader.readAsDataURL(file);
+};
