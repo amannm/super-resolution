@@ -71135,6 +71135,7 @@ var __awaiter = (undefined && undefined.__awaiter) || function (thisArg, _argume
 class SuperResolutionModel {
     constructor(model) {
         this.model = model;
+        this.fromPixels2DContext = document.createElement('canvas').getContext('2d');
     }
     static open(path) {
         return __awaiter(this, void 0, void 0, function* () {
@@ -71146,38 +71147,69 @@ class SuperResolutionModel {
         this.model.dispose();
     }
     predict(batches) {
-        return tidy(() => this.model.predict(batches.toFloat()).clipByValue(0, 255).round().toInt());
-    }
-    resolveBatch(inputs) {
-        return __awaiter(this, void 0, void 0, function* () {
-            if (inputs.length === 0) {
-                return [];
-            }
-            const outputImageWidth = inputs[0].width * SuperResolutionModel.SCALING_FACTOR;
-            const outputImageHeight = inputs[0].height * SuperResolutionModel.SCALING_FACTOR;
-            const lowResolutionImages = tidy(() => stack(inputs.map(fromPixels)));
-            const highResolutionImages = tidy(() => this.predict(lowResolutionImages).unstack());
-            lowResolutionImages.dispose();
-            return yield Promise.all(highResolutionImages.map(highResolutionImage => toPixels(highResolutionImage).then(pixelData => {
-                highResolutionImage.dispose();
-                return new ImageData(pixelData, outputImageWidth, outputImageHeight);
-            })));
+        return tidy(() => {
+            const input = cast(batches, "float32");
+            const prediction = this.model.predict(input);
+            const clipped = clipByValue(prediction, 0, 255);
+            return cast(clipped, "int32");
         });
     }
-    resolve(input) {
+    resolveBatch(inputBitmaps) {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (inputBitmaps.length === 0) {
+                return [];
+            }
+            const t0 = performance.now();
+            const outputImageWidth = inputBitmaps[0].width * SuperResolutionModel.SCALING_FACTOR;
+            const outputImageHeight = inputBitmaps[0].height * SuperResolutionModel.SCALING_FACTOR;
+            const highResolutionImages = tidy(() => {
+                const inputs = inputBitmaps.map(input => this.copyToImageTensor(input));
+                const expanded = stack(inputs);
+                const predicted = this.predict(expanded);
+                return unstack(predicted);
+            });
+            const outputBitmaps = yield Promise.all(highResolutionImages.map((highResolutionImage) => __awaiter(this, void 0, void 0, function* () {
+                const imageBitmap = yield this.copyToImageBitmap(highResolutionImage, outputImageWidth, outputImageHeight);
+                highResolutionImage.dispose();
+                return imageBitmap;
+            })));
+            const t1 = performance.now();
+            console.log(`resolution took ${t1 - t0} milliseconds.`);
+            console.log(memory());
+            return outputBitmaps;
+        });
+    }
+    resolve(inputBitmap) {
         return __awaiter(this, void 0, void 0, function* () {
             const t0 = performance.now();
-            const outputImageWidth = input.width * SuperResolutionModel.SCALING_FACTOR;
-            const outputImageHeight = input.height * SuperResolutionModel.SCALING_FACTOR;
-            const lowResolutionImage = tidy(() => expandDims(fromPixels(input)));
-            const highResolutionImage = tidy(() => this.predict(lowResolutionImage).squeeze());
-            lowResolutionImage.dispose();
-            const pixelData = yield toPixels(highResolutionImage);
+            const outputImageWidth = inputBitmap.width * SuperResolutionModel.SCALING_FACTOR;
+            const outputImageHeight = inputBitmap.height * SuperResolutionModel.SCALING_FACTOR;
+            const highResolutionImage = tidy(() => {
+                const input = this.copyToImageTensor(inputBitmap);
+                const expanded = expandDims(input);
+                const predicted = this.predict(expanded);
+                return squeeze(predicted);
+            });
+            const outputBitmap = yield this.copyToImageBitmap(highResolutionImage, outputImageWidth, outputImageHeight);
             highResolutionImage.dispose();
             const t1 = performance.now();
             console.log(`resolution took ${t1 - t0} milliseconds.`);
             console.log(memory());
-            return new ImageData(pixelData, outputImageWidth, outputImageHeight);
+            return outputBitmap;
+        });
+    }
+    copyToImageTensor(imageBitmap) {
+        this.fromPixels2DContext.canvas.width = imageBitmap.width;
+        this.fromPixels2DContext.canvas.height = imageBitmap.height;
+        this.fromPixels2DContext.drawImage(imageBitmap, 0, 0);
+        const imageData = this.fromPixels2DContext.getImageData(0, 0, imageBitmap.width, imageBitmap.height);
+        return fromPixels(imageData);
+    }
+    copyToImageBitmap(imageTensor, width, height) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const imageDataArray = yield toPixels(imageTensor);
+            const imageData = new ImageData(imageDataArray, width, height);
+            return yield createImageBitmap(imageData);
         });
     }
 }
@@ -71200,137 +71232,120 @@ class ImageEnhancer {
     }
     load(image) {
         return __awaiter$1(this, void 0, void 0, function* () {
-            // render image on pixel buffer
-            const widthParams = ImageEnhancer.splitLength(image.width);
-            const heightParams = ImageEnhancer.splitLength(image.height);
-            this.canvas.width = image.width - widthParams.remainder;
-            this.canvas.height = image.height - heightParams.remainder;
-            const ctx = this.canvas.getContext('2d');
-            ctx.drawImage(image, 0, 0, this.canvas.width, this.canvas.height, 0, 0, this.canvas.width, this.canvas.height);
-            // extract image patches from rendered image
-            this.patches = [];
-            for (let gridY = 0; gridY < heightParams.stepCount; gridY++) {
-                for (let gridX = 0; gridX < widthParams.stepCount; gridX++) {
-                    const cellTopLeftX = gridX * widthParams.stepSize;
-                    const cellTopLeftY = gridY * heightParams.stepSize;
-                    const imageData = ctx.getImageData(cellTopLeftX, cellTopLeftY, widthParams.stepSize, heightParams.stepSize);
-                    this.patches.push({
-                        topLeftX: cellTopLeftX,
-                        topLeftY: cellTopLeftY,
-                        originalImage: imageData,
-                        enhancedImage: null
-                    });
+            // clear existing state
+            while (this.patches.length > 0) {
+                const patch = this.patches.pop();
+                patch.originalImage.close();
+                if (patch.enhancedImage) {
+                    patch.enhancedImage.close();
                 }
             }
-            // prepare for enhancement
-            ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-            this.canvas.width *= SuperResolutionModel.SCALING_FACTOR;
-            this.canvas.height *= SuperResolutionModel.SCALING_FACTOR;
-            yield Promise.all(this.patches.map(patch => this.drawOriginalPatch(patch)));
+            // calculate new patch grid
+            const widthParams = ImageEnhancer.splitLength(image.width);
+            const heightParams = ImageEnhancer.splitLength(image.height);
+            // resize canvas
+            this.canvas.width = (widthParams.stepCount * ImageEnhancer.PATCH_SIZE - widthParams.remainder) * SuperResolutionModel.SCALING_FACTOR;
+            this.canvas.height = (heightParams.stepCount * ImageEnhancer.PATCH_SIZE - heightParams.remainder) * SuperResolutionModel.SCALING_FACTOR;
             this.canvas.style.width = (this.canvas.width / SuperResolutionModel.SCALING_FACTOR) + "px";
             this.canvas.style.height = (this.canvas.height / SuperResolutionModel.SCALING_FACTOR) + "px";
-        });
-    }
-    toggleEnhancedVisibility() {
-        return __awaiter$1(this, void 0, void 0, function* () {
-            if (this.enhancedLayerOpacity !== 0) {
-                this.enhancedLayerOpacity = 0;
+            // extract and draw image patches
+            const newPatchTasks = [];
+            for (let gridY = 0; gridY < heightParams.stepCount; gridY++) {
+                for (let gridX = 0; gridX < widthParams.stepCount; gridX++) {
+                    const widthOverhang = gridX === widthParams.stepCount - 1 ? widthParams.remainder : 0;
+                    const heightOverhang = gridY === heightParams.stepCount - 1 ? heightParams.remainder : 0;
+                    const cellTopLeftX = gridX * ImageEnhancer.PATCH_SIZE - widthOverhang;
+                    const cellTopLeftY = gridY * ImageEnhancer.PATCH_SIZE - heightOverhang;
+                    const newPatchTask = createImageBitmap(image, cellTopLeftX, cellTopLeftY, ImageEnhancer.PATCH_SIZE, ImageEnhancer.PATCH_SIZE).then(imageData => {
+                        const patch = {
+                            topLeftX: cellTopLeftX,
+                            topLeftY: cellTopLeftY,
+                            originalImage: imageData
+                        };
+                        this.drawOriginalPatch(patch);
+                        return patch;
+                    });
+                    newPatchTasks.push(newPatchTask);
+                }
             }
-            else {
-                this.enhancedLayerOpacity = 1.0;
-            }
-            yield this.draw();
-            console.log("enhanced layer visibility: " + this.enhancedLayerOpacity);
+            this.patches = yield Promise.all(newPatchTasks);
+            console.log("new image loaded");
         });
     }
     enhance(model) {
         return __awaiter$1(this, void 0, void 0, function* () {
-            // prepare pixel buffer
-            this.canvas.removeAttribute("style");
-            // incremental patch enhancement to avoid blowing up the GPU
+            const t0 = performance.now();
             for (let i = 0; i < this.patches.length; i++) {
                 const patch = this.patches[i];
-                yield model.resolve(patch.originalImage).then(enhancedImage => {
-                    patch.enhancedImage = enhancedImage;
-                    return this.drawEnhancedPatch(patch);
-                });
+                patch.enhancedImage = yield model.resolve(patch.originalImage);
+                this.drawEnhancedPatch(patch);
             }
-            // present results
-            this.canvas.style.width = (this.canvas.width / SuperResolutionModel.SCALING_FACTOR) + "px";
-            this.canvas.style.height = (this.canvas.height / SuperResolutionModel.SCALING_FACTOR) + "px";
-            console.log("enhanced layer complete");
+            const t1 = performance.now();
+            console.log(`enhance completed in ${t1 - t0} milliseconds.`);
         });
     }
     drawOriginalPatch(patch) {
-        return __awaiter$1(this, void 0, void 0, function* () {
-            const originalImage = yield createImageBitmap(patch.originalImage, {
-                resizeWidth: patch.originalImage.width * SuperResolutionModel.SCALING_FACTOR,
-                resizeHeight: patch.originalImage.height * SuperResolutionModel.SCALING_FACTOR,
-                resizeQuality: "high"
-            });
-            const ctx = this.canvas.getContext("2d");
-            ctx.drawImage(originalImage, patch.topLeftX * SuperResolutionModel.SCALING_FACTOR, patch.topLeftY * SuperResolutionModel.SCALING_FACTOR);
-            originalImage.close();
-        });
+        const ctx = this.canvas.getContext("2d");
+        ctx.save();
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(patch.originalImage, patch.topLeftX * SuperResolutionModel.SCALING_FACTOR, patch.topLeftY * SuperResolutionModel.SCALING_FACTOR, ImageEnhancer.PATCH_SIZE * SuperResolutionModel.SCALING_FACTOR, ImageEnhancer.PATCH_SIZE * SuperResolutionModel.SCALING_FACTOR);
+        ctx.restore();
     }
     drawEnhancedPatch(patch) {
-        return __awaiter$1(this, void 0, void 0, function* () {
-            const enhancedImage = yield createImageBitmap(patch.enhancedImage);
-            const ctx = this.canvas.getContext("2d");
-            ctx.save();
-            ctx.globalAlpha = this.enhancedLayerOpacity;
-            ctx.drawImage(enhancedImage, patch.topLeftX * SuperResolutionModel.SCALING_FACTOR, patch.topLeftY * SuperResolutionModel.SCALING_FACTOR);
-            ctx.restore();
-            enhancedImage.close();
-        });
+        const ctx = this.canvas.getContext("2d");
+        ctx.save();
+        ctx.globalAlpha = this.enhancedLayerOpacity;
+        ctx.drawImage(patch.enhancedImage, patch.topLeftX * SuperResolutionModel.SCALING_FACTOR, patch.topLeftY * SuperResolutionModel.SCALING_FACTOR);
+        ctx.restore();
     }
     drawPatch(patch) {
-        return __awaiter$1(this, void 0, void 0, function* () {
-            yield this.drawOriginalPatch(patch);
-            if (patch.enhancedImage !== null) {
-                yield this.drawEnhancedPatch(patch);
-            }
-        });
+        this.drawOriginalPatch(patch);
+        if (patch.enhancedImage) {
+            this.drawEnhancedPatch(patch);
+        }
     }
     draw() {
-        return __awaiter$1(this, void 0, void 0, function* () {
-            this.canvas.removeAttribute("style");
-            const ctx = this.canvas.getContext("2d");
-            ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-            yield Promise.all(this.patches.map(patch => this.drawPatch(patch)));
-            this.canvas.style.width = (this.canvas.width / SuperResolutionModel.SCALING_FACTOR) + "px";
-            this.canvas.style.height = (this.canvas.height / SuperResolutionModel.SCALING_FACTOR) + "px";
-        });
+        const ctx = this.canvas.getContext("2d");
+        ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        this.patches.forEach(patch => this.drawPatch(patch));
+    }
+    toggleEnhancedVisibility() {
+        if (this.enhancedLayerOpacity !== 0) {
+            this.enhancedLayerOpacity = 0;
+            this.draw();
+            console.log("enhanced layer off");
+        }
+        else {
+            this.enhancedLayerOpacity = 1.0;
+            this.draw();
+            console.log("enhanced layer on");
+        }
     }
     static splitLength(length) {
-        let stepCount = Math.floor(length / ImageEnhancer.MAX_PATCH_SIZE);
+        let stepCount = Math.floor(length / ImageEnhancer.PATCH_SIZE);
         if (stepCount === 0) {
             return {
-                stepSize: length,
                 stepCount: 1,
-                remainder: 0
+                remainder: ImageEnhancer.PATCH_SIZE - length
             };
         }
         else {
-            if (length % ImageEnhancer.MAX_PATCH_SIZE === 0) {
+            if (length % ImageEnhancer.PATCH_SIZE === 0) {
                 return {
-                    stepSize: ImageEnhancer.MAX_PATCH_SIZE,
                     stepCount: stepCount,
                     remainder: 0
                 };
             }
             else {
-                stepCount++;
                 return {
-                    stepSize: Math.floor(length / stepCount),
-                    stepCount: stepCount,
-                    remainder: length % stepCount
+                    stepCount: stepCount + 1,
+                    remainder: ImageEnhancer.PATCH_SIZE - length % ImageEnhancer.PATCH_SIZE
                 };
             }
         }
     }
 }
-ImageEnhancer.MAX_PATCH_SIZE = 128;
+ImageEnhancer.PATCH_SIZE = 128;
 
 var __awaiter$2 = (undefined && undefined.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
