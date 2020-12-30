@@ -37,19 +37,17 @@ export class ImageEnhancer {
         const heightParams = ImageEnhancer.splitLength(image.height);
 
         // resize canvas
-        this.canvas.width = (widthParams.stepCount * ImageEnhancer.PATCH_SIZE - widthParams.remainder) * SuperResolutionModel.SCALING_FACTOR;
-        this.canvas.height = (heightParams.stepCount * ImageEnhancer.PATCH_SIZE - heightParams.remainder) * SuperResolutionModel.SCALING_FACTOR;
-        this.canvas.style.width = (this.canvas.width / SuperResolutionModel.SCALING_FACTOR) + "px";
-        this.canvas.style.height = (this.canvas.height / SuperResolutionModel.SCALING_FACTOR) + "px";
+        this.canvas.width = image.width * SuperResolutionModel.SCALING_FACTOR;
+        this.canvas.height = image.height * SuperResolutionModel.SCALING_FACTOR;
+        this.canvas.style.width = image.width + "px";
+        this.canvas.style.height = image.height + "px";
 
         // extract and draw image patches
         const newPatchTasks = [];
         for (let gridY = 0; gridY < heightParams.stepCount; gridY++) {
             for (let gridX = 0; gridX < widthParams.stepCount; gridX++) {
-                const widthOverhang = gridX === widthParams.stepCount - 1 ? widthParams.remainder : 0;
-                const heightOverhang = gridY === heightParams.stepCount - 1 ? heightParams.remainder : 0;
-                const cellTopLeftX = gridX * ImageEnhancer.PATCH_SIZE - widthOverhang;
-                const cellTopLeftY = gridY * ImageEnhancer.PATCH_SIZE - heightOverhang;
+                const cellTopLeftX = gridX * ImageEnhancer.PATCH_SIZE;
+                const cellTopLeftY = gridY * ImageEnhancer.PATCH_SIZE;
                 const newPatchTask = createImageBitmap(image, cellTopLeftX, cellTopLeftY, ImageEnhancer.PATCH_SIZE, ImageEnhancer.PATCH_SIZE).then(imageData => {
                     const patch = {
                         topLeftX: cellTopLeftX,
@@ -89,8 +87,8 @@ export class ImageEnhancer {
             patch.originalImage,
             patch.topLeftX * SuperResolutionModel.SCALING_FACTOR,
             patch.topLeftY * SuperResolutionModel.SCALING_FACTOR,
-            ImageEnhancer.PATCH_SIZE * SuperResolutionModel.SCALING_FACTOR, 
-            ImageEnhancer.PATCH_SIZE * SuperResolutionModel.SCALING_FACTOR
+            patch.originalImage.width * SuperResolutionModel.SCALING_FACTOR,
+            patch.originalImage.height * SuperResolutionModel.SCALING_FACTOR
         );
         ctx.restore();
     }
