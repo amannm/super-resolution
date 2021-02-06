@@ -22,50 +22,18 @@ export class SuperResolutionModel {
         this.model.dispose();
     }
 
-    private predict(batches: tf.Tensor4D): tf.Tensor4D {
-        return tf.tidy(() => {
-            const input = tf.cast(batches, "float32")
-            const prediction = this.model.predict(input) as tf.Tensor4D;
-            const clipped = tf.clipByValue(prediction, 0, 255);
-            return tf.cast(clipped, "int32");
-        });
-    }
-
-    public async resolveBatch(inputBitmaps: ImageBitmap[]): Promise<ImageBitmap[]> {
-        if (inputBitmaps.length === 0) {
-            return [];
-        }
-        const t0 = performance.now();
-        const outputImageWidth = inputBitmaps[0].width * SuperResolutionModel.SCALING_FACTOR;
-        const outputImageHeight = inputBitmaps[0].height * SuperResolutionModel.SCALING_FACTOR;
-        const highResolutionImages = tf.tidy(() => {
-            const inputs = inputBitmaps.map(input => this.copyToImageTensor(input));
-            const expanded = tf.stack(inputs) as tf.Tensor4D;
-            const predicted = this.predict(expanded);
-            return tf.unstack(predicted) as tf.Tensor3D[];
-        });
-        const outputBitmaps = await Promise.all(
-            highResolutionImages.map(async highResolutionImage => {
-                const imageBitmap = await this.copyToImageBitmap(highResolutionImage, outputImageWidth, outputImageHeight);
-                highResolutionImage.dispose();
-                return imageBitmap;
-            })
-        );
-        const t1 = performance.now();
-        console.log(`resolution took ${t1 - t0} milliseconds.`);
-        console.log(tf.memory());
-        return outputBitmaps;
-    }
-
     public async resolve(inputBitmap: ImageBitmap): Promise<ImageBitmap> {
         const t0 = performance.now();
         const outputImageWidth = inputBitmap.width * SuperResolutionModel.SCALING_FACTOR;
         const outputImageHeight = inputBitmap.height * SuperResolutionModel.SCALING_FACTOR;
         const highResolutionImage = tf.tidy(() => {
             const input = this.copyToImageTensor(inputBitmap);
-            const expanded = tf.expandDims(input) as tf.Tensor4D;
-            const predicted = this.predict(expanded);
-            return tf.squeeze(predicted) as tf.Tensor3D;
+            const floatInput = tf.cast(input, "float32");
+            const batchedInput = tf.expandDims(floatInput) as tf.Tensor4D;
+            const prediction = this.model.predict(batchedInput) as tf.Tensor4D;
+            const unbatchedOutput = tf.squeeze(prediction) as tf.Tensor3D;
+            const clippedOutput = tf.clipByValue(unbatchedOutput, 0, 255);
+            return tf.cast(clippedOutput, "int32");
         });
         const outputBitmap = await this.copyToImageBitmap(highResolutionImage, outputImageWidth, outputImageHeight);
         highResolutionImage.dispose();
