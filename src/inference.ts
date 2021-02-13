@@ -25,7 +25,7 @@ export abstract class SuperResolutionModel {
     public abstract close(): void
 }
 
-export class RemoteSuperResolutionModel extends SuperResolutionModel {
+class RemoteSuperResolutionModel extends SuperResolutionModel {
 
     private baseUrl: string;
 
@@ -98,7 +98,7 @@ export class RemoteSuperResolutionModel extends SuperResolutionModel {
     }
 }
 
-export class LocalSuperResolutionModel extends SuperResolutionModel {
+class LocalSuperResolutionModel extends SuperResolutionModel {
 
     private model: tf.GraphModel;
 
