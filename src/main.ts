@@ -50,7 +50,8 @@ async function load() {
 load();
 
 const processImageFile = (file: File) => {
-    const loadModelTask = SuperResolutionModel.open("../model/esrgan/model.json");
+    const loadModelTask = SuperResolutionModel.openLocal("../model/esrgan/model.json");
+    //const loadModelTask = SuperResolutionModel.openRemote("http://amann-linux:8080");
     const fileReader = new FileReader();
     fileReader.onload = async () => {
         const image = await createImageBitmap(file);
