@@ -5,10 +5,17 @@ export abstract class SuperResolutionModel {
 
     public static readonly SCALING_FACTOR = 4;
 
-    protected fromPixels2DContext: CanvasRenderingContext2D;
+    private fromPixels2DContext: CanvasRenderingContext2D;
 
     protected constructor() {
         this.fromPixels2DContext = document.createElement('canvas').getContext('2d');
+    }
+
+    protected renderBitmap(imageBitmap: ImageBitmap): ImageData {
+        this.fromPixels2DContext.canvas.width = imageBitmap.width;
+        this.fromPixels2DContext.canvas.height = imageBitmap.height;
+        this.fromPixels2DContext.drawImage(imageBitmap, 0, 0);
+        return this.fromPixels2DContext.getImageData(0, 0, imageBitmap.width, imageBitmap.height);
     }
 
     public static async openLocal(modelPath: string): Promise<SuperResolutionModel> {
@@ -39,10 +46,7 @@ class RemoteSuperResolutionModel extends SuperResolutionModel {
 
     public async resolve(imageBitmap: ImageBitmap): Promise<ImageBitmap> {
         const t0 = performance.now();
-        this.fromPixels2DContext.canvas.width = imageBitmap.width;
-        this.fromPixels2DContext.canvas.height = imageBitmap.height;
-        this.fromPixels2DContext.drawImage(imageBitmap, 0, 0);
-        const imageData = this.fromPixels2DContext.getImageData(0, 0, imageBitmap.width, imageBitmap.height);
+        const imageData = this.renderBitmap(imageBitmap);
         const upscaledImageData = await this.upscale(imageData);
         const outputBitmap = await createImageBitmap(upscaledImageData);
         const t1 = performance.now();
@@ -133,10 +137,7 @@ class LocalSuperResolutionModel extends SuperResolutionModel {
     }
 
     private copyToImageTensor(imageBitmap: ImageBitmap): Tensor3D {
-        this.fromPixels2DContext.canvas.width = imageBitmap.width;
-        this.fromPixels2DContext.canvas.height = imageBitmap.height;
-        this.fromPixels2DContext.drawImage(imageBitmap, 0, 0);
-        const imageData = this.fromPixels2DContext.getImageData(0, 0, imageBitmap.width, imageBitmap.height);
+        const imageData = this.renderBitmap(imageBitmap);
         return tf.browser.fromPixels(imageData);
     }
 
