@@ -1,4 +1,4 @@
-import { SuperResolutionModel } from "./inference"
+import {SuperResolutionModel} from "./inference";
 
 interface ImagePatch {
     topLeftX: number,

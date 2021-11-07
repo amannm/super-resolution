@@ -1,5 +1,5 @@
-import { SuperResolutionModel } from "./inference";
-import { ImageEnhancer } from "./imageEnhancer"
+import {SuperResolutionModel} from "./inference";
+import {ImageEnhancer} from "./imageEnhancer";
 
 const inputCanvas = document.getElementById("canvas") as HTMLCanvasElement;
 const enhancer = new ImageEnhancer(inputCanvas);
@@ -13,18 +13,18 @@ async function load() {
                 enhancer.toggleEnhancedVisibility();
                 break;
             default:
-                break
+                break;
         }
     });
 
     // file drag and drop trigger
     const root = document.getElementById("root");
     root.addEventListener("drop", (e) => {
-        console.log('File(s) dropped');
+        console.log("File(s) dropped");
         e.preventDefault();
         if (e.dataTransfer.items) {
             for (let i = 0; i < e.dataTransfer.items.length; i++) {
-                if (e.dataTransfer.items[i].kind === 'file') {
+                if (e.dataTransfer.items[i].kind === "file") {
                     const file = e.dataTransfer.items[i].getAsFile();
                     processImageFile(file);
                 }
@@ -37,14 +37,14 @@ async function load() {
         }
     });
     root.addEventListener("dragover", (e) => {
-        console.log('File(s) in drop zone');
+        console.log("File(s) in drop zone");
         e.preventDefault();
     });
 
     // hacky convenience things
     (window as any).lol = {
         enhancer: enhancer
-    }
+    };
 }
 
 load();
@@ -63,4 +63,4 @@ const processImageFile = (file: File) => {
         console.log("image processing complete");
     };
     fileReader.readAsDataURL(file);
-}
+};
